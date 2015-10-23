@@ -1,8 +1,9 @@
 import numpy as np
+from scipy.interpolate import interp1d, InterpolatedUnivariateSpline
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
+from matplotlib.colors import ListedColormap, BoundaryNorm
 import matplotlib.path as path
-import matplotlib.animation as animation
+from matplotlib.collections import LineCollection
 import spidev
 import time
 #Set up plot
@@ -25,6 +26,7 @@ class SensorReadings(dict):
     """Created when one of the sensors goes over the threshold set for recording"""
     def __init__(self,key):
         super(SensorReadings,self).__init__(key)
+        self.state='asleep'
     def pprint(self):
         for key in sorted(self.iterkeys()):
             print key , self.get(key)
@@ -49,14 +51,15 @@ class SensorReadings(dict):
         f.suptitle('Reading ' + str(count),fontsize = 20)
         for key in sorted(self.iterkeys()):
             axarr[i].set_title(key)
-            axarr[i].plot(self[key])
+            lc= coloredPlot(axarr[i],self[key],'b','y','r')
+            lc.set_linewidth(3)
             i+=1
             if (min(self[key]) < rmin):
                 rmin = min(self[key])
             if (max(self[key]) > rmax):
                 rmax = max(self[key])
         f.text(0.03,0.6,'force level',rotation = 'vertical')
-        plt.axis([0,len(self.values()[0]),rmin - 15,rmax + 15])
+        plt.axis([0,len(self.values()[0]),rmin - 100,rmax + 100])
         plt.show()
         plt.savefig("Reading" + str(count) + ".png")
 #------------------------------------------------------------
@@ -79,26 +82,43 @@ def updateBuffer(table,values):
         table[key].append(values[i])
         i+=1
 #------------------------------------------------------------
+def coloredPlot(axes, reading,cold,warm,hot):
+    x = range(0,len(reading))
+    xi = np.linspace(0,len(reading),101)
+    f = InterpolatedUnivariateSpline(x,reading)
+    colormap = ListedColormap([cold,warm,hot])
+    norm = BoundaryNorm([min(reading),300,650,max(reading)],colormap.N)
+    points = np.array([xi,f(xi)]).T.reshape(-1,1,2)
+    segments = np.concatenate([points[:-1], points[1:]], axis =1)
+    lc = LineCollection(segments,cmap = colormap, norm = norm)
+    lc.set_array(f(xi))
+    axes.add_collection(lc)
+    axes.set_xlim(0,len(x))
+    axes.set_ylim(min(f(xi))-15,max(f(xi))+15)
+    return lc
+#------------------------------------------------------------
 def Poll(table,values,bufferval):
     global count
     """Called to check if any sensor values are over the threshold, expects table to be a SensorReadings object and values to be a Reading object"""
-    delay = 0.0001
+    delay = 0.01
     values.update()
     if (len(table.values()[0]) == 0):
         delay = 0.1
         checkBuffer(bufferval)
         updateBuffer(bufferval,values)
     for value in values:
-        if value > 650:
+        if ((value > 650) or (table.state == 'triggered')):
             if (len(table.values()[0]) == 0):
+                table.state = 'triggered'
                 table.copy(bufferval)
             table.add_reading(values)
-            if (len(table.values()[0]) >= 20):
+            if (len(table.values()[0]) >= 40):
                 count+=1
                 print str(count) + ": Current figure"
-                table.pprint()
+                #table.pprint()
                 table.plot()
                 table.reset()
+                table.state = 'asleep' 
             break
     time.sleep(delay)
 #------------------------------------------------------------
