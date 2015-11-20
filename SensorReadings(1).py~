@@ -1,16 +1,12 @@
 import numpy as np
-from scipy.interpolate import interp1d, InterpolatedUnivariateSpline
 import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap, BoundaryNorm
+import matplotlib.patches as patches
 import matplotlib.path as path
-from matplotlib.collections import LineCollection
+import matplotlib.animation as animation
 import spidev
 import time
-import os
-import signal
 #Set up plot
 count=0
-buffercount = 0
 #Set up spi in order to use our A/D converter
 spi = spidev.SpiDev()
 spi.open(0,0)
@@ -29,8 +25,6 @@ class SensorReadings(dict):
     """Created when one of the sensors goes over the threshold set for recording"""
     def __init__(self,key):
         super(SensorReadings,self).__init__(key)
-        self.state='asleep'
-        self.stored = 0
     def pprint(self):
         for key in sorted(self.iterkeys()):
             print key , self.get(key)
@@ -39,45 +33,32 @@ class SensorReadings(dict):
         for key in sorted(self.iterkeys()):
             self[key].append(reading[i])
             i+=1
-        self.stored = len(self.values()[0])
     def copy(self,table):
         for key in sorted(self.iterkeys()):
             self[key]=table[key]
     def reset(self):
         for key in sorted(self.iterkeys()):
             self[key]=[]
-            self.stored = 0
     def plot(self):
         global count
         rmax=0
         rmin=1200
         i=0
-        j=0
         plt.figure(count)
-        print 'Plotting Figure %d'%count
-        f, axarr = plt.subplots(4,2,sharex=True,sharey=True)
+        f, axarr = plt.subplots(len(self),sharex=True,sharey=True)
         f.suptitle('Reading ' + str(count),fontsize = 20)
         for key in sorted(self.iterkeys()):
-            if i == 4:
-                j+=1
-                i = 0
-            print 'Setting up subplot for %s'%(key)
-            axarr[i,j].set_title(key)
-            lc= coloredPlot(axarr[i,j],self[key],'b','y','r')
-            lc.set_linewidth(2)
+            axarr[i].set_title(key)
+            axarr[i].plot(self[key])
             i+=1
             if (min(self[key]) < rmin):
                 rmin = min(self[key])
             if (max(self[key]) > rmax):
                 rmax = max(self[key])
         f.text(0.03,0.6,'force level',rotation = 'vertical')
-        plt.axis([0,self.stored,rmin-15,rmax+100])
+        plt.axis([0,len(self.values()[0]),rmin - 15,rmax + 15])
         plt.show()
-        print 'Saving Figure'
-        f.savefig("Reading" + str(count) + ".png")
-        print 'Done Saving Figure'
-        self.reset()
-        os.kill(os.getpid(),signal.SIGTERM)
+        plt.savefig("Reading" + str(count) + ".png")
 #------------------------------------------------------------
 #---------------User Defined Functions-----------------------
 #This function was taken from http://www.raspberrypi-spy.co.uk/2013/10/analogue-sensors-on-the-raspberry-pi-using-an-mcp3008/ and is used here to convert the digital input from the ADC into a meaningful value between 0-1024 (10 bit ADC)
@@ -98,75 +79,34 @@ def updateBuffer(table,values):
         table[key].append(values[i])
         i+=1
 #------------------------------------------------------------
-def initBuffer(table):
-    for key in sorted(table.iterkeys()):
-        for i in range (0,10):
-            table[key].append(0)
-#------------------------------------------------------------
-def coloredPlot(axes,reading,cold,warm,hot):
-    x = range(0,len(reading))
-    xi = np.linspace(0,len(reading),101)
-    f = InterpolatedUnivariateSpline(x,reading)
-    colormap = ListedColormap([cold,warm,hot])
-    norm = BoundaryNorm([min(reading)-100,300,650,max(reading)+100],colormap.N)
-    points = np.array([xi,f(xi)]).T.reshape(-1,1,2)
-    segments = np.concatenate([points[:-1], points[1:]], axis =1)
-    lc = LineCollection(segments,cmap = colormap, norm = norm)
-    lc.set_array(f(xi))
-    axes.add_collection(lc)
-    axes.set_xlim(0,len(x))
-    axes.set_ylim(min(f(xi)),max(f(xi))+15)
-    return lc
-#------------------------------------------------------------
 def Poll(table,values,bufferval):
-    global buffercount
     global count
     """Called to check if any sensor values are over the threshold, expects table to be a SensorReadings object and values to be a Reading object"""
-    delay = 0.01
+    delay = 0.0001
     values.update()
-    if (table.state == 'asleep'):
-        buffercount+=1
-        if buffercount >= 10:
-            buffercount = 0
-            checkBuffer(bufferval)
-            updateBuffer(bufferval,values)
+    if (len(table.values()[0]) == 0):
+        delay = 0.1
+        checkBuffer(bufferval)
+        updateBuffer(bufferval,values)
     for value in values:
-        if ((value > 650) or (table.state == 'triggered')):
-            if (table.state == 'asleep'):
-                table.state = 'triggered'
+        if value > 650:
+            if (len(table.values()[0]) == 0):
                 table.copy(bufferval)
             table.add_reading(values)
-            print 'Table now has %d values in it'%table.stored
-            checklength(table) 
+            if (len(table.values()[0]) >= 20):
+                count+=1
+                print str(count) + ": Current figure"
+                table.pprint()
+                table.plot()
+                table.reset()
             break
     time.sleep(delay)
 #------------------------------------------------------------
-def checklength(table):
-    global count
-    if (table.stored == 40):
-        count+=1
-        table.state = 'asleep'
-        proc_num = os.fork()
-        if proc_num == 0:
-            table.plot()
-        else:
-            table.reset()
-    elif (table.stored > 40):
-        table.reset()
-#-----------------------------------------------------------
 #--------------------Main Control System---------------------
 #First we initialize a Reading object to hold the values of our sensors and a SensorReadings object to store any values that are over the threshold
-start = time.time()
-CurrentSensorValues = Reading([ReadSensor(0),ReadSensor(1),ReadSensor(2),ReadSensor(3),ReadSensor(4),ReadSensor(5),ReadSensor(6),ReadSensor(7)])
-SensorTable = SensorReadings({'Sensor 0' : [],'Sensor 1' : [],'Sensor 2' : [],'Sensor 3' : [],'Sensor 4' : [],'Sensor 5' : [],'Sensor 6' : [],'Sensor 7' : []})
-BufferTable = {'Sensor 0' : [],'Sensor 1' : [],'Sensor 2' : [],'Sensor 3' : [],'Sensor 4' : [],'Sensor 5' : [],'Sensor 6' : [],'Sensor 7' : []}
-initBuffer(BufferTable)
-elapsedtime = 0
+CurrentSensorValues = Reading([ReadSensor(0),ReadSensor(1),ReadSensor(2)])#,ReadSensor(3),ReadSensor(4),ReadSensor(5),ReadSensor(6),ReadSensor(7)])
+SensorTable = SensorReadings({'Sensor 0' : [],'Sensor 1' : [],'Sensor 2' : []})#,'Sensor 3' : [],'Sensor 4' : [],'Sensor 5' : [],'Sensor 6' : [],'Sensor 7' : []})
+BufferTable = {'Sensor 0' : [],'Sensor 1' : [],'Sensor 2' : []}#,'Sensor 3' : [],'Sensor 4' : [],'Sensor 5' : [],'Sensor 6' : [],'Sensor 7' : []}
 #Next we begin polling our sensors to see if any have broken the threshold
 while True:
-    currenttime=time.time()
     Poll(SensorTable,CurrentSensorValues,BufferTable)
-    
-    
-    if (currenttime - start > 180):
-        break
