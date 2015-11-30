@@ -85,7 +85,12 @@ def ReadSensor(sensor):
     """sensor must be between 0-7 because our ADC has 8 analog inputs"""
     adc = spi.xfer2([1,(8 + sensor)<<4,0])
     data = ((adc[1] & 3) << 8) + adc[2]
-    return data
+    force = calcForce(data)
+    return force
+#------------------------------------------------------------
+def calcForce(data):
+    global f
+    return f(data)
 #------------------------------------------------------------
 def checkBuffer(table):
     while(len(table.values()[0]) >= 10):
@@ -154,8 +159,18 @@ def checklength(table):
     elif (table.stored > 40):
         table.reset()
 #-----------------------------------------------------------
+def createBestfit():
+    #input experimental values here
+    points= np.array[(first resistance, first force),...]
+    x = points[:,0]
+    y = points[:,1]
+    z = np.bpolyfit(x,y,3)
+    f = np.poly1d(z)
+    return f
+#-----------------------------------------------------------
 #--------------------Main Control System---------------------
 #First we initialize a Reading object to hold the values of our sensors and a SensorReadings object to store any values that are over the threshold
+f = createBestfit()
 start = time.time()
 CurrentSensorValues = Reading([ReadSensor(0),ReadSensor(1),ReadSensor(2),ReadSensor(3),ReadSensor(4),ReadSensor(5),ReadSensor(6),ReadSensor(7)])
 SensorTable = SensorReadings({'Sensor 0' : [],'Sensor 1' : [],'Sensor 2' : [],'Sensor 3' : [],'Sensor 4' : [],'Sensor 5' : [],'Sensor 6' : [],'Sensor 7' : []})
@@ -167,6 +182,5 @@ while True:
     currenttime=time.time()
     Poll(SensorTable,CurrentSensorValues,BufferTable)
     
-    
-    if (currenttime - start > 180):
+    if (currenttime - start > 360):
         break
